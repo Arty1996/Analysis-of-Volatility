@@ -1,0 +1,307 @@
+
+Importing required libraries
+
+```{r}
+library('readxl')
+library('ggplot2')
+library('dplyr')
+library('xtable')
+library('aTSA')
+library('tseries')
+library('forecast')
+```
+
+Importing and pre-processing data
+
+```{r}
+data = as.data.frame(read_excel(file.choose())) # download data
+data[, 1] = as.Date.POSIXct(data[, 1], format = '%d.%m.%y') # convert time to POSIX
+data[data == 0] = NA # All 0-values from data is actually NA
+data = data[complete.cases(data), ] # drop all rows with NA
+```
+
+Creating df with log-return time series for each column of initial df
+
+```{r}
+data2 = data
+for (j in c(2:6)){
+  data2[, j] = log(data2[, j] / lag(data2[, j]))
+}
+data2 = data2[complete.cases(data2), ]
+```
+
+Descriptive visualization
+
+```{r}
+plot_price = function(data, ticker, type, saved = FALSE){
+  if (type == 'price'){
+    title = paste('Динамика цены ', ticker, sep = '')
+    y = 'Цена закрытия'
+  } else if (type == 'return'){
+    title = paste('Динамика логдоходности ', ticker, sep = '')
+    y = 'Логдоходность'
+  }
+  plot = ggplot(data[, c('TRADEDATE', ticker)], aes(x = get('TRADEDATE'), y = get(ticker))) + 
+    geom_line() + theme_bw() + labs(x = 'Дата', y = y, 
+                                    title = title)
+  if (saved == TRUE) {
+    ggsave(paste('plot_', type, '_', ticker, '.jpg', sep = ''), 
+           plot = last_plot(), device = NULL, path = NULL,
+           scale = 1, width = NA, height = NA, units = c("in", "cm", "mm"),
+           dpi = 300, limitsize = TRUE)
+  }
+  return(plot)
+}
+
+for (ticker in c('RUAL', 'GMKN', 'CHMF', 'NLMK', 'MAGN')){
+  plot_price(data, ticker, 'price', saved = TRUE)
+  plot_price(data2, ticker, 'return', saved = TRUE)
+}
+```
+
+Stationarity check
+
+```{r}
+stationarity_check = function(ticker, type){
+  stat_result = aTSA::adf.test(data2[, ticker])
+  if (type == '1'){
+    data = stat_result$type1
+  } else if (type == '2'){
+    data = stat_result$type2
+  } else if (type == '3'){
+    data = stat_result$type3
+  }
+  output = xtable(data, 
+                  type = 'latex')
+  print(output, file = paste('adf_test_', type, '_', ticker, '.tex', sep = ''), 
+        floating = getOption("xtable.floating", FALSE)) 
+}
+for (j in c('RUAL', 'GMKN', 'CHMF', 'NLMK', 'MAGN')){
+  for (k in c('1', '2', '3')){
+    stationarity_check(j, k)
+  }
+}
+```
+
+Testing for Normality, calculating skewness/kurtosis
+
+```{r}
+distr_return = function(data, ticker, saved = FALSE){
+  ggplot(data = data, 
+         aes(get(ticker))) + geom_histogram() + theme_bw() + labs(x = ticker, y = 'Частота', 
+                                                           title = paste('Распределение логдоходностей ', ticker, 
+                                                                         sep = '')) + 
+    stat_function(fun=dnorm,
+                  color='grey',
+                  args=list(mean=mean(data[, ticker]), 
+                            sd=sd(data[, ticker])))
+  if (saved == TRUE) {
+    ggsave(paste('hist_', '_', ticker, '.png', sep = ''), 
+           plot = last_plot(), device = NULL, path = NULL,
+           scale = 1, width = NA, height = NA, units = c("in", "cm", "mm"),
+           dpi = 300, limitsize = TRUE)
+    
+  }
+}
+
+for (j in c('RUAL', 'GMKN', 'CHMF', 'NLMK', 'MAGN')){
+  distr_return(data2, j, saved = TRUE)
+}
+```
+
+Shapiro-Wilk
+
+```{r}
+normality_test = function(data, ticker){
+  result_shapiro = shapiro.test(data[, ticker])
+  stat_shapiro = round(as.numeric(result_shapiro$statistic), 3)
+  pvalue_shapiro = format(round(as.numeric(result_shapiro$p.value), digits = 3))
+  row = c(ticker, stat_shapiro, pvalue_shapiro)
+  return(row)
+  
+}
+results = normality_test(data2, 'RUAL')
+for (j in c('GMKN', 'CHMF', 'NLMK', 'MAGN')){
+  results = rbind(results, normality_test(data2, j))
+}
+results = as.data.frame(results)
+names(results) = c('ticker', 'Shapiro-Wilk', 'p.value')
+rownames(results) = c()
+print(
+  xtable(results, digits = 3), file = 'shapiro_wilk.tex', 
+  floating = getOption("xtable.floating", FALSE))
+```
+
+ARMA modeling
+
+```{r}
+png('acf_rual.png', width = 350, height = 350)
+plot(acf(data2[, 'RUAL']), main = 'RUAL')
+dev.off()
+png('pacf_rual.png', width = 350, height = 350)
+plot(pacf(data2[, 'RUAL']), main = 'RUAL')
+dev.off()
+auto.arima(data2[, 'RUAL'])
+model_rual = arima(data2[, 'RUAL'], c(1, 0, 1))
+model_rual$aic
+
+png('acf_gmkn.png', width = 350, height = 350)
+plot(acf(data2[, 'GMKN']), main = 'GMKN')
+dev.off()
+png('pacf_gmkn.png', width = 350, height = 350)
+plot(pacf(data2[, 'GMKN']), main = 'GMKN')
+dev.off()
+auto.arima(data2[, 'GMKN'])
+model_gmkn = arima(data2[, 'GMKN'], c(3, 0, 2))
+model_gmkn$aic
+
+png('acf_chmf.png', width = 350, height = 350)
+plot(acf(data2[, 'CHMF']), main = 'CHMF')
+dev.off()
+png('pacf_chmf.png', width = 350, height = 350)
+plot(pacf(data2[, 'CHMF']), main = 'CHMF')
+dev.off()
+auto.arima(data2[, 'CHMF'])
+model_chmf = arima(data2[, 'CHMF'], c(2, 0, 2))
+model_chmf$aic
+
+png('acf_nlmk.png', width = 350, height = 350)
+plot(acf(data2[, 'NLMK']), main = 'NLMK')
+dev.off()
+png('pacf_nlmk.png', width = 350, height = 350)
+plot(pacf(data2[, 'NLMK']), main = 'NLMK')
+dev.off()
+auto.arima(data2[, 'NLMK'])
+model_nlmk = arima(data2[, 'NLMK'], c(2, 0, 2))
+model_nlmk$aic
+
+png('acf_magn.png', width = 350, height = 350)
+plot(acf(data2[, 'MAGN']), main = 'MAGN')
+dev.off()
+png('pacf_magn.png', width = 350, height = 350)
+plot(pacf(data2[, 'MAGN']), main = 'MAGN')
+dev.off()
+auto.arima(data2[, 'MAGN'])
+model_magn = arima(data2[, 'MAGN'], c(2, 0, 2))
+model_magn$aic
+```
+
+Checking WN
+
+```{r}
+RUAL = Box.test(model_rual$residuals, type='Ljung', lag=log(length(model_rual$residuals)))
+GMKN = Box.test(model_gmkn$residuals, type='Ljung', lag=log(length(model_gmkn$residuals)))
+CHMF = Box.test(model_chmf$residuals, type='Ljung', lag=log(length(model_chmf$residuals)))
+NLMK = Box.test(model_nlmk$residuals, type='Ljung', lag=log(length(model_nlmk$residuals)))
+MAGN = Box.test(model_magn$residuals, type='Ljung', lag=log(length(model_magn$residuals)))
+
+row_combine = function(boxes, ticker){
+  row = cbind(ticker, round(as.numeric(boxes$statistic), 3), round(as.numeric(boxes$p.value), 3))
+  rownames(row) = NULL  
+  return(row)
+}
+
+whitenoisecheck = row_combine(get('RUAL'), 'RUAL')
+for (j in c('GMKN', 'CHMF', 'NLMK', 'MAGN')){
+  whitenoisecheck = rbind(whitenoisecheck, row_combine(get(j), j))
+}
+whitenoisecheck = as.data.frame(whitenoisecheck)
+names(whitenoisecheck) = c('Ticker', 'Box-Ljung', 'p.value')
+print(xtable(whitenoisecheck), file = 'whitenoise.tex', 
+      floating = getOption("xtable.floating", FALSE))
+```
+
+Checking ARCH effect
+
+```{r}
+rual_arch = xtable(round(arch.test(model_rual), digits = 3))
+print(rual_arch, file = 'rual_arch.tex', floating = getOption('xtable.floating', FALSE))
+gmkn_arch = xtable(round(arch.test(model_gmkn), digits = 3))
+print(gmkn_arch, file = 'gmkn_arch.tex', floating = getOption('xtable.floating', FALSE))
+chmf_arch = xtable(round(arch.test(model_chmf), digits = 3))
+print(chmf_arch, file = 'chmf_arch.tex', floating = getOption('xtable.floating', FALSE))
+nlmk_arch = xtable(round(arch.test(model_nlmk), digits = 3))
+print(nlmk_arch, file = 'nlmk_arch.tex', floating = getOption('xtable.floating', FALSE))
+magn_arch = xtable(round(arch.test(model_magn), digits = 3))
+print(magn_arch, file = 'magn_arch.tex', floating = getOption('xtable.floating', FALSE))
+```
+
+GARCH/ARCH modelling
+
+```{r}
+acf(model_rual$residuals ** 2)
+pacf(model_rual$residuals ** 2)
+
+acf(model_gmkn$residuals ** 2)
+pacf(model_gmkn$residuals ** 2)
+
+acf(model_chmf$residuals ** 2)
+pacf(model_chmf$residuals ** 2)
+
+acf(model_nlmk$residuals ** 2)
+pacf(model_nlmk$residuals ** 2)
+
+acf(model_magn$residuals ** 2)
+pacf(model_magn$residuals ** 2)
+
+g_rual = garch(model_rual$residuals, order = c(2, 1))
+AIC(g_rual)
+g_gmkn = garch(model_gmkn$residuals, order = c(1, 1))
+AIC(g_gmkn)
+g_chmf = garch(model_chmf$residuals, order = c(1, 1))
+AIC(g_chmf)
+g_nlmk = garch(model_nlmk$residuals, order = c(1, 1))
+AIC(g_nlmk)
+g_magn = garch(model_magn$residuals, order = c(1, 1))
+AIC(g_magn)
+```
+
+Ranking
+
+```{r}
+ranking = rbind(
+c(round(mean((g_rual$fitted.values)[,1], na.rm = TRUE), 5), 'RUAL'),
+c(round(mean((g_gmkn$fitted.values)[,1], na.rm = TRUE), 5), 'GMKN'),
+c(round(mean((g_chmf$fitted.values)[,1], na.rm = TRUE), 5), 'CHMF'),
+c(round(mean((g_nlmk$fitted.values)[,1], na.rm = TRUE), 5), 'NLMK'),
+c(round(mean((g_magn$fitted.values)[,1], na.rm = TRUE), 5), 'MAGN')
+)
+ranking = as.data.frame(ranking)
+ranking = ranking[order(ranking[, 1]), ]
+names(ranking) = c('Средняя волатильность', 'Тикер')
+rownames(ranking) = NULL
+
+print(xtable(ranking), file = 'ranking.tex', floating = getOption('xtable.floating', FALSE))
+```
+
+Plots
+
+```{r}
+library(fGarch)
+
+pr_rual = garchFit(formula = ~arma(1,1) + garch(2,1), data = data2[, 'RUAL'], trace = F)
+png('pr_rual.png', width = 450, height = 350, res = 100)
+plot_pr_rual = predict(pr_rual, 2, plot = TRUE, crit_val = 2)
+dev.off()
+
+pr_gmkn = garchFit(formula = ~arma(3,2) + garch(1,1), data = data2[, 'GMKN'], trace = F)
+png('pr_gmkn.png', width = 450, height = 350, res = 100)
+plot_pr_gmkn = predict(pr_gmkn, 2, plot = TRUE, crit_val = 2)
+dev.off()
+
+pr_chmf = garchFit(formula = ~arma(2,2) + garch(1,1), data = data2[, 'CHMF'], trace = F)
+png('pr_chmf.png', width = 450, height = 350, res = 100)
+plot_pr_chmf = predict(pr_chmf, 2, plot = TRUE, crit_val = 2)
+dev.off()
+
+pr_nlmk = garchFit(formula = ~arma(2,2) + garch(1,1), data = data2[, 'NLMK'], trace = F)
+png('pr_nlmk.png', width = 450, height = 350, res = 100)
+plot_pr_nlmk = predict(pr_nlmk, 2, plot = TRUE, crit_val = 2)
+dev.off()
+
+pr_magn = garchFit(formula = ~arma(2,2) + garch(1,1), data = data2[, 'MAGN'], trace = F)
+png('pr_magn.png', width = 450, height = 350, res = 100)
+plot_pr_magn = predict(pr_magn, 2, plot = TRUE, crit_val = 2)
+dev.off()
+```
+
